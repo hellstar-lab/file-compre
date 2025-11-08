@@ -1,0 +1,143 @@
+Title: Advanced File Compressor — Full Project Reference (All Functions, Architecture, and Workflows)
+
+Overview
+- Purpose: Production-style compressor/decompressor using a simple `COMP` container, multiple algorithms (Huffman, LZ77/LZW, BWT+MTF+Huffman, DEFLATE, LZMA), and specialized codecs for audio and PDFs. Includes an image preconditioner to improve ratios for BMP.
+- Design: Public APIs in `include/`, implementations in `src/`, vendor libs in `third_party/`. CLI tools produce `.comp` files; decompressor validates headers and CRC.
+- Container: `COMP` header stores magic, version, algorithm, sizes, CRC32, and original extension. Payload is algorithm output (typically DEFLATE via miniz/zlib or LZMA in specialized flows).
+
+Directory Map
+- `include/` — Public APIs: `comp_container.h`, `compressor.h`, `decompressor.h`, `img_preconditioner.h`, `zlib_adapter.h`, `comp_result.h`.
+- `src/` — Implementations: key modules include `comp_container.c`, `universal_cli.c`, `zlib_adapter.c`, `deflate_wrapper.c`, `pdf_reflate.c`, `audio_doc_codec.h`, `img_preconditioner.c`, `lz77.c`, `huffman.c`, `delta_rle.c`, `parser.c`, `utility.c`, `crc32.c`, `compressor.c`, `universal_decompressor.c`.
+- `third_party/miniz/` — Miniz (zlib-compatible) DEFLATE/inflate.
+- `docs/` — Guides and mappings. This file is the comprehensive project reference.
+
+[COMP Container]
+- Header layout (`include/comp_container.h`):
+  - Fields: `magic[4]="COMP"`, `version=1`, `algorithm`, `reserved (u16)`, `original_size (u64)`, `compressed_size (u64)`, `crc32 (u32)`, `ext[16]`.
+- Functions (definitions in `src/comp_container.c`):
+  - `bool comp_write_header(FILE* f, const comp_header_t* hdr)` — Writes the container header to `f`. Expects valid magic and size fields; returns true on success.
+  - `bool comp_read_header(FILE* f, comp_header_t* hdr)` — Reads header from `f` into `hdr`; returns true on success.
+  - `bool comp_validate_header(const comp_header_t* hdr)` — Validates magic, version, sizes, and ext field; returns true if header is well-formed.
+  - `void comp_fill_header(comp_header_t* hdr, uint16_t algo, uint64_t orig, uint64_t comp, uint32_t crc, const char* ext)` — Populates a header with algorithm id, sizes, CRC32, and extension.
+
+[Zlib/Miniz Adapter]
+- Purpose: Provide buffer-level compression compatible with zlib semantics.
+- Functions (`src/zlib_adapter.c`):
+  - `size_t za_compress_buffer(const uint8_t* in, size_t in_len, uint8_t* out, size_t out_cap)` — Compresses `in` to `out` using miniz (`deflate_compress`) when `USE_MINIZ`; returns compressed length or 0 on failure.
+  - `size_t za_decompress_buffer(const uint8_t* in, size_t in_len, uint8_t* out, size_t out_cap)` — Decompresses `in` to `out` using miniz (`deflate_decompress`) when `USE_MINIZ`; returns decompressed length or 0.
+- Thin wrappers (`src/deflate_wrapper.c`):
+  - `size_t deflate_compress(const uint8_t* in, size_t in_len, uint8_t* out, size_t out_cap, int level)` — Calls `mz_compress2`; returns compressed length.
+  - `size_t deflate_decompress(const uint8_t* in, size_t in_len, uint8_t* out, size_t out_cap)` — Calls `mz_uncompress`; returns decompressed length.
+
+[CRC32 Utilities]
+- Functions (`src/crc32.c`):
+  - `uint32_t crc32_compute(const uint8_t* buf, size_t len)` — Computes CRC32 over buffer.
+  - `uint32_t crc32_update(uint32_t seed, const uint8_t* buf, size_t len)` — Incremental CRC32 update.
+
+[Universal CLI]
+- Purpose: Command-line tool to compress to `.comp` and decompress from `.comp` containers.
+- Main operations (`src/universal_cli.c`):
+  - `int compress_file(const char* in_path, const char* out_dir)` — Reads input, computes CRC, compresses via `za_compress_buffer`, builds header, writes container payload to `<out_dir>/<name>.comp`.
+  - `int decompress_file(const char* in_path, const char* out_dir)` — Reads and validates header, inflates payload via `za_decompress_buffer`, CRC-verifies, writes output to `<out_dir>/<name>` with original extension.
+  - `static void usage(const char* program_name)` — Prints CLI usage and notes (including restriction to `output/*.comp`).
+  - Helpers: path normalization, directory creation, extension detection, error reporting.
+
+[Decompressor System]
+- Orchestrator (`src/universal_decompressor.c`):
+  - Displays supported formats; drives parsing (`parser.c`), file I/O, logging, and fallback.
+- Parser (`src/parser.c`):
+  - `int parse_comp_header(FILE* f, InternalCompHeader* out)` — Reads and validates container headers (v3/v4), maps to internal structure.
+  - `int validate_internal_header(const InternalCompHeader* hdr)` — Ensures field integrity and supported algorithm.
+- File I/O (`src/file_io.c`/`src/file_io_fixed.c`): robust read/write, directory ops.
+- Logging (`src/logger.c`, `src/logger_fixed.c`): log levels, formatting; fixed variants for deterministic outputs.
+
+[Algorithms (Core)]
+- Huffman (`src/huffman.c`):
+  - `int huffman_compress(const uint8_t* in, size_t len, uint8_t** out, size_t* out_len)` — Builds frequency table, constructs tree, writes bitstream.
+  - `int huffman_decompress(const uint8_t* in, size_t len, uint8_t** out, size_t* out_len)` — Reconstructs tree, decodes bitstream.
+  - `CompResult huffman_decompress_optimized(...)` (prototype in `include/compressor.h`) — Optimized path variant used by decompressor core.
+- LZ77/LZW (`src/lz77.c`):
+  - `int lz77_compress(const uint8_t* in, size_t len, uint8_t** out, size_t* out_len)` — Finds matches and literals; emits (length, distance) pairs.
+  - `int lz77_decompress_optimized(const uint8_t* in, size_t len, uint8_t** out, size_t* out_len)` — Fast path decompressor; reconstructs output using sliding window.
+  - `int lz77_decompress(const uint8_t* in, size_t len, uint8_t** out, size_t* out_len)` — Calls optimized variant.
+  - `int lzw_decompress_optimized(const uint8_t* in, size_t len, uint8_t** out, size_t* out_len)` — LZW decompressor wrapper (routes to LZ77 optimized logic in this stub).
+  - `int lzw_decompress(const uint8_t* in, size_t len, uint8_t** out, size_t* out_len)` — Calls `lzw_decompress_mfunc` (stub in `src/missing_functions.c`).
+- Delta+RLE (`src/delta_rle.c`):
+  - `size_t delta_rle_pre(const uint8_t* in, size_t len, uint8_t* out, size_t out_cap)` — Applies delta coding over initial region and run-length encodes sequences using `RUN_MARKER=0xFF` when beneficial.
+  - `size_t delta_rle_post(const uint8_t* in, size_t len, uint8_t* out, size_t out_cap)` — Reverses delta coding and expands RLE runs.
+- Hardcore (`src/hardcore_compression.c`):
+  - `int hardcore_compress(const uint8_t* in, size_t len, uint8_t** out, size_t* out_len)` — Multi-stage: BWT → MTF → RLE → Dictionary → Huffman.
+  - `int hardcore_decompress(const uint8_t* in, size_t len, uint8_t** out, size_t* out_len)` — Inverse pipeline.
+
+[Image Preconditioning]
+- BMP SUB filter (`src/img_preconditioner.c`, `include/img_preconditioner.h`):
+  - `int bmp_detect_24(const uint8_t* buf, size_t len, bmp_info_t* out)` — Detects 24-bit BMP, computes row stride and metadata.
+  - `int bmp_sub_encode(const uint8_t* src_pixels, uint8_t* dst_pixels, const bmp_info_t* info)` — Per-row left predictor (PNG SUB) to decorrelate bytes; improves DEFLATE.
+  - `int bmp_sub_decode(const uint8_t* src_pixels, uint8_t* dst_pixels, const bmp_info_t* info)` — Inverse of SUB filter; reconstructs original pixels.
+- Image compressor stub (`src/image_compressor_stub.c`):
+  - `int image_compress(...)` — Uses an image-lossless container; PNG-style filters + LZMA (stubbed behavior documented).
+  - `int image_decompress(...)` — Produces valid PNG via miniz encoding; used for header size in `compressor.c` image path.
+
+[Audio/PDF Header Codecs]
+- Header-only codecs (`src/audio_doc_codec.h`):
+  - WAV:
+    - `size_t wav_compress(const uint8_t* in, size_t in_len, uint8_t* out, size_t out_cap)` — Mid/side transform and delta coding; DEFLATE; pass-through fallback if not smaller.
+    - `size_t wav_decompress(const uint8_t* in, size_t in_len, uint8_t* out, size_t out_cap)` — Inflates and rebuilds PCM from stored deltas or passes through raw.
+  - MP3:
+    - `size_t mp3_compress(const uint8_t* in, size_t in_len, uint8_t* out, size_t out_cap)` — Builds small reorder map; DEFLATE; ensures roundtrip via stored mapping; pass-through fallback.
+    - `size_t mp3_decompress(const uint8_t* in, size_t in_len, uint8_t* out, size_t out_cap)` — Restores original frame order or passes through.
+  - PDF (simple codec):
+    - `size_t pdf_compress(const uint8_t* in, size_t in_len, uint8_t* out, size_t out_cap)` — Wraps [`ADCP` + len + payload], DEFLATE, fallback to pass-through if not smaller.
+    - `size_t pdf_decompress(const uint8_t* in, size_t in_len, uint8_t* out, size_t out_cap)` — Inflates and restores payload or passes through.
+
+[PDF Reflate]
+- Stream-aware recompression (`src/pdf_reflate.c`):
+  - `size_t pdf_compress(const uint8_t* pdf, size_t pdf_len, uint8_t* out, size_t out_cap)` — Scans PDF for objects; inflates `/FlateDecode` streams; optionally applies Paeth per-row for images; recompresses with DEFLATE level 9; rebuilds a normalized PDF.
+  - `size_t pdf_decompress(const uint8_t* cmp, size_t cmp_len, uint8_t* out, size_t out_cap)` — Current stub (identity copy); proper reversal requires stored mapping.
+
+[Compressor Core]
+- Main compression orchestrator (`src/compressor.c`):
+  - `int compress_file_intelligent(const char* input_path, const char* output_path, CompressionLevel level, FileType file_type, CompressionAlgorithm algo, CompressionStats* stats)` — Top-level flow selecting algorithms and preconditioning based on file type and size; builds custom container (v3) header and writes output.
+  - Key behaviors:
+    - PDF path: `pdf_compress` preprocessor → `lzma_compress` (level 9) when preprocessing succeeds; otherwise fallback.
+    - Image path: when BMP/PNG/TGA, `img_compress` container; tries roundtrip to PNG to determine header sizes and extension.
+    - Large generic files: optional delta+RLE preconditioning for PDF/WAV headers; image detection and reencode; else LZMA; smaller files use DEFLATE.
+    - Header assembly: sets magic/version/algorithm/level/file type, writes original and compressed sizes; for image-advanced, stores PNG ext and size.
+
+[Utilities]
+- Common helpers (`src/utility.c`, `src/utils.c`): path ops, extension detection, byte utilities.
+- Endianness shim (`src/byte_order.c`, `src/endian_shim.c`): cross-platform conversions.
+
+[Tests]
+- `tests/test_core.c`, `tests/test_selector.c`, `tests/test_codec_header.c`, `tests/test_image_metrics.c` — Unit/integration tests to validate algorithms, headers, and image metrics.
+
+Function Index (Public APIs and Notable Implementations)
+- `comp_write_header` — Write COMP header to a stream.
+- `comp_read_header` — Read COMP header from a stream.
+- `comp_validate_header` — Validate COMP header fields.
+- `comp_fill_header` — Populate COMP header with metadata.
+- `za_compress_buffer` — Buffer-level zlib/miniz compression.
+- `za_decompress_buffer` — Buffer-level zlib/miniz decompression.
+- `deflate_compress` — Thin miniz DEFLATE wrapper.
+- `deflate_decompress` — Thin miniz inflate wrapper.
+- `crc32_compute` — Compute CRC32 over a buffer.
+- `crc32_update` — Update CRC32 incrementally.
+- `compress_file` (CLI) — Build `.comp` via adapter and write output.
+- `decompress_file` (CLI) — Read/validate header, inflate payload, CRC-verify.
+- `huffman_compress` / `huffman_decompress` — Entropy coding.
+- `lz77_compress` / `lz77_decompress[_optimized]` — Dictionary compression/decompression.
+- `lzw_decompress` — LZW decompressor invoking stub `lzw_decompress_mfunc`.
+- `delta_rle_pre` / `delta_rle_post` — Delta predict + run-length encode and inverse.
+- `bmp_detect_24` — Detect BMP24 and compute stride.
+- `bmp_sub_encode` / `bmp_sub_decode` — PNG SUB filter encode/decode for BMP rows.
+- `wav_compress` / `wav_decompress` — WAV header-codec with mid/side + delta.
+- `mp3_compress` / `mp3_decompress` — MP3 header-codec with frame map.
+- `pdf_compress` (header codec) — Wrap and DEFLATE with fallback.
+- `pdf_compress` (reflate) — Stream-aware recompress and PDF rebuild.
+- `image_compress` / `image_decompress` — Image-lossless container (stub behavior documented).
+- `compress_file_intelligent` — Orchestrated algorithm selection and header building.
+
+Notes
+- Public APIs are concentrated in `include/`; internal static helpers across `src/*.c` support parsing, buffer management, and error handling.
+- Where multiple implementations exist for the same logical function (e.g., `pdf_compress`), this reference lists both and clarifies their roles.
+- Miniz is the default DEFLATE backend; enabling `USE_ZLIB` switches to system zlib if configured.

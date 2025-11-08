@@ -1,0 +1,94 @@
+Advanced File Compressor — Algorithm Mapping and Workflows (2025-10-29 00:06:03)
+
+Overview
+- Consolidated mapping of algorithms, wrappers, and container I/O with exact function names and line ranges.
+- Compression/decompression workflows, error behaviors, and verification tests with expected console outputs.
+
+Algorithm Mapping
+- LZ77/LZW (src/lz77.c)
+  - `lz77_compress` lines 94–138
+  - `lz77_decompress_optimized` lines 174–252
+  - `lz77_decompress` lines 288–290 (routes to optimized)
+  - `lzw_decompress_optimized` lines 293–296 (routes to LZ77 optimized)
+  - `lzw_decompress` lines 299–304 (calls `lzw_decompress_mfunc`)
+- LZW stub (src/missing_functions.c)
+  - `lzw_decompress_mfunc` lines 1–8 (minimal stub returning -1)
+- Delta+RLE Pre/Post (src/delta_rle.c)
+  - Key constants: `ONE_MB`, `RUN_MARKER=0xFF`
+  - `delta_rle_pre` lines ~28–88 (preprocess with delta for first 1MB + RLE; escapes 0xFF)
+  - `delta_rle_post` lines ~92–154 (inverse RLE + reverse delta for first 1MB)
+- DEFLATE wrapper (src/deflate_wrapper.c)
+  - `deflate_compress` lines 6–17 (miniz `mz_compress2`)
+  - `deflate_decompress` lines 20–25 (miniz `mz_uncompress`)
+- Zlib Adapter (src/zlib_adapter.c)
+  - `za_compress_buffer` lines 14–35 (routes to `deflate_compress` when `USE_MINIZ`)
+  - `za_decompress_buffer` lines 39–55 (routes to `deflate_decompress` when `USE_MINIZ`)
+- COMP Container I/O
+  - Header (include/comp_container.h): structure and APIs
+  - Implementations (src/comp_container.c):
+    - `comp_write_header` lines 49–66
+    - `comp_read_header` lines 68–84
+    - `comp_validate_header` lines 86–97
+    - `comp_fill_header` lines 99–107
+- Universal CLI policy (src/universal_cli.c)
+  - Decompression restriction logic: `decompress_file` lines 272–300
+  - Usage text reflecting restriction: `usage` lines 357–369
+
+Compression Workflow (Universal CLI)
+- Read input; detect extension (`get_ext_from_path` or magic).
+- Compute `crc32` of input.
+- Optional preconditioning for BMP (SUB filter) with IMGF payload.
+- Compress via `za_compress_buffer` (zlib/miniz); capture `comp_size`.
+- Fill container header with `comp_fill_header` using `COMP_ALGO_ZLIB`.
+- Write header with `comp_write_header` and then payload to `output/<base>.comp`.
+- Console: `[SUCCESS] Compressed <in> -> <out> (<orig> -> <comp> bytes)`.
+
+Decompression Workflow (Universal CLI)
+- Enforce `.comp` suffix and `output/` path requirement.
+- Read header with `comp_read_header` and validate via `comp_validate_header`.
+- Inflate using `za_decompress_buffer` to exact `original_size`.
+- If BMP IMGF, decode SUB filter and reconstruct header+pixels.
+- Verify CRC32 matches header `crc32`.
+- Write to `decompressed/<base>.<ext>` (or `-o <dir>` if provided).
+- Console: `[SUCCESS] Decompressed <in> -> <out> (Verified)`.
+
+Error Behaviors
+- LZ77/LZW
+  - `lz77_decompress_optimized`: returns -1 on header flag 0x00 or invalid token; upstream reports "decompression failed".
+  - `lzw_decompress`: calls `lzw_decompress_mfunc`; stub returns -1 → core logs failure.
+- Delta+RLE
+  - `delta_rle_pre`: returns 0 on capacity issues; may fallback to original if expansion >2%.
+  - `delta_rle_post`: returns 0 on truncated streams or capacity overrun.
+- DEFLATE wrapper
+  - `deflate_compress`/`deflate_decompress`: return 0 on error from miniz.
+- Zlib Adapter
+  - Returns `-1` on invalid args or deflate failure; never writes partials.
+- COMP Container
+  - `comp_validate_header`: rejects non-`COMP` magic, wrong version, unsupported algorithm, or zero sizes.
+- Universal CLI restriction
+  - Refuses decompress if file not `.comp` or not under `output/`; emits descriptive error.
+- Common messages
+  - "Compression failed", "Header write failed", "Payload write failed", "Invalid COMP header", "CRC mismatch", "Write failed".
+
+Verification Test Cases
+- Zlib Adapter Roundtrip
+  - Input: random bytes, compress then decompress; expect identical output; console shows success of compress path.
+  - Expected: `za_compress_buffer` returns 0; `za_decompress_buffer` returns 0; output size equals original size.
+- Universal CLI Restriction
+  - Input: `some/path/file.comp` not under `output/`.
+  - Expected: "Refusing to decompress: input must reside under 'output/' directory".
+- COMP Header Validation
+  - Input: crafted header with wrong magic/version/zero sizes.
+  - Expected: `comp_validate_header` returns false; CLI prints "Invalid COMP header".
+- DEFLATE Wrapper Error
+  - Input: destination capacity too small.
+  - Expected: wrapper returns 0; adapter returns -1; CLI prints "Compression failed".
+- LZ77/LZW Core Failures
+  - Input: raw stored block to `lz77_decompress_optimized` (flag 0x00).
+  - Expected: returns -1; compressor_core logs error and reports failure.
+
+Notes
+- Build flags: `USE_ZLIB` or `USE_MINIZ` determine adapter routing.
+- BMP preconditioning improves ratios for flat-color images; CRC ensures integrity.
+- Documented line ranges reflect current files at creation time.
+

@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Advanced File Compressor — Web</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <h1>Advanced File Compressor — Web</h1>
+    <p>Upload a file to compress or decompress. Output downloads automatically.</p>
+  </header>
+
+  <main>
+    <section class="panel">
+      <div class="drop" id="drop">
+        <p>Drag & drop a file here or use the picker below.</p>
+      </div>
+      <div class="controls">
+        <input type="file" id="file" />
+        <button id="compress">Compress</button>
+        <button id="decompress">Decompress</button>
+      </div>
+      <div class="status" id="status"></div>
+      <pre class="log" id="log"></pre>
+    </section>
+  </main>
+
+  <script>
+    const fileInput = document.getElementById('file');
+    const drop = document.getElementById('drop');
+    const statusEl = document.getElementById('status');
+    const logEl = document.getElementById('log');
+
+    function setStatus(msg) { statusEl.textContent = msg; }
+    function appendLog(line) { logEl.textContent += line + "\n"; }
+
+    function getFile() {
+      if (fileInput.files && fileInput.files[0]) return fileInput.files[0];
+      setStatus('Please select a file first.');
+      return null;
+    }
+
+    async function postFile(endpoint) {
+      const f = getFile();
+      if (!f) return;
+      setStatus('Uploading…');
+      const fd = new FormData();
+      fd.append('file', f);
+      const resp = await fetch(endpoint, { method: 'POST', body: fd });
+      if (!resp.ok) {
+        const txt = await resp.text();
+        setStatus('Error: ' + txt);
+        appendLog('Error: ' + txt);
+        return;
+      }
+      // Try to read x-output-filename header for naming
+      const outName = resp.headers.get('x-output-filename') || (f.name + (endpoint.includes('compress') ? '.comp' : ''));
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = outName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setStatus('Done. Downloaded ' + outName);
+    }
+
+    document.getElementById('compress').onclick = () => postFile('/compress');
+    document.getElementById('decompress').onclick = () => postFile('/decompress');
+
+    drop.addEventListener('dragover', ev => { ev.preventDefault(); drop.classList.add('hover'); });
+    drop.addEventListener('dragleave', () => drop.classList.remove('hover'));
+    drop.addEventListener('drop', ev => {
+      ev.preventDefault(); drop.classList.remove('hover');
+      if (ev.dataTransfer.files && ev.dataTransfer.files[0]) {
+        fileInput.files = ev.dataTransfer.files;
+        setStatus('Selected: ' + ev.dataTransfer.files[0].name);
+      }
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,107 @@
+Render Deployment Guide — File Compressor (Docker)
+
+Goal
+- Deploy the web-based File Compressor globally on Render using Docker.
+- You will get a public HTTPS URL.
+ - Includes notes for the Free tier to avoid spend.
+
+What Render Uses
+- A GitHub repo with this project.
+- A `Dockerfile` at the repository root.
+- Render builds the image and runs `python3 web/server.py` inside the container.
+ - On Free tier, services may sleep or have resource limits; suitable for demos/testing.
+
+Important Files to Commit to GitHub
+- `Dockerfile` — required for Docker deploy.
+- `.dockerignore` — keeps the Docker build context small.
+- `web/server.py` — serves the UI and wraps the CLI.
+- `web/index.html`, `web/style.css` — frontend.
+- `Makefile` — builds the CLI used by the server.
+- `src/**`, `include/**`, `third_party/**` — compressor sources and dependencies.
+- `README.md`, `docs/HOSTING_GUIDE.txt`, `docs/RENDER_DEPLOY_GUIDE.txt` — documentation.
+
+Files/Paths You Can Omit From GitHub (Optional)
+- Local build artifacts: `build/`, `obj/`, `build_log.txt`.
+- Local outputs and samples: `output/`, `decompressed/`, `preview/`, `*.out`, `*.comp`.
+- Local runtime data: contents of `web/uploads/` and `web/output/` (server creates directories).
+- Editor/OS files: `.vscode/`, `.DS_Store`.
+
+How the App Runs in Render
+- The `Dockerfile` compiles the CLI (`make bin/universal_comp.exe`) during the image build.
+- The server auto-detects the CLI in `bin/universal_comp.exe` or `build/cli/universal`.
+- The server binds `HOST=0.0.0.0` and reads `PORT` (Render provides this).
+- Decompression safety: uploaded `.comp` files are copied to `/app/web/output` before `-d`.
+
+Step-by-Step Deployment
+1) Prepare your repo
+   - Ensure `Dockerfile` and `.dockerignore` exist at the root.
+   - Verify `web/server.py` uses `HOST` and `PORT` env vars (it does).
+   - Commit and push to GitHub.
+
+2) Create the Render Web Service
+   - Go to https://render.com/ and log in.
+   - Click “New +” → “Web Service”.
+   - Choose your GitHub repo.
+   - Under “Runtime”, select “Docker”. Render will detect `Dockerfile` automatically.
+
+3) Service settings
+   - Name: `file-compressor` (or any name).
+   - Region: choose nearest to your users.
+   - Plan: choose Free for zero cost. Expect limits (sleep on inactivity, CPU/memory caps).
+   - Docker Port: `8080` (the port exposed in the container).
+   - Environment variables:
+     - `HOST=0.0.0.0`
+       
+       Tip: You can copy-paste the contents of `docs/render.env` to quickly add these in Render’s Environment tab.
+     - `PORT=8080`
+   - Auto Deploy: enable (deploys on every push to main).
+
+4) Persistent storage (optional but recommended)
+   - Add a Disk: e.g., 1–5 GB.
+   - Mount Path: `/app/web` (this keeps uploads/ and output/ across restarts).
+
+5) Create Service
+   - Click “Create Web Service”.
+   - Wait for the build to finish (Docker image build compiles the C CLI).
+   - When live, Render shows a public URL (HTTPS).
+
+6) Validate
+   - Open the URL.
+   - Try “Compress” with a small file; it should download a `.comp` file.
+   - Try “Decompress” by uploading a `.comp`; you should get the original file.
+   - Check logs in Render dashboard for any errors.
+
+7) Custom domain (optional)
+   - In the service settings, add a custom domain.
+   - Update your DNS (A/AAAA or CNAME) to point to Render.
+   - Render will provision TLS automatically.
+
+Operational Tips
+- Upload size: current server reads files into memory; keep files modest. For large files, implement streaming.
+- Rate limiting/security: consider adding basic auth or limits if hosting publicly.
+- Logs: use Render’s logs tab to diagnose issues.
+- Updates: push to GitHub → Render rebuilds and deploys automatically if Auto Deploy is on.
+ - Free-tier considerations: if your service sleeps, waking can take time. Keep uploads modest to stay within resource caps.
+
+Common Issues & Fixes
+- Build fails compiling CLI:
+  - Ensure `Makefile` works in Linux (it should with build-essential).
+  - Add any missing packages to `Dockerfile` `apt-get install` line.
+- 404 or blank page:
+  - Confirm `web/index.html` exists and server printed “Serving web UI …”.
+- CLI not found:
+  - The `Dockerfile` builds it; confirm `bin/universal_comp.exe` exists in container logs.
+- Decompression refused:
+  - The server moves `.comp` into `/app/web/output` before running `-d` to satisfy CLI checks.
+ - Free-tier sleeping or quota reached:
+   - Try redeploying or wait for reset depending on Render’s policy. Consider moving heavy workloads off Free tier.
+
+Quick Commands (Local test)
+- Build and run locally to verify before pushing:
+  docker build -t file-compressor:latest .
+  docker run --rm -p 8080:8080 file-compressor:latest
+  # Visit http://localhost:8080/
+
+Next Steps
+- Proceed to create the Render service with the settings above.
+- Share the public URL once deployed; we can then add limits or auth if needed.

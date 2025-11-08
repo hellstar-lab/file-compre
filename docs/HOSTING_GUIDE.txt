@@ -1,0 +1,145 @@
+File Compressor — Global Hosting Guide
+
+Overview
+- This guide explains how to deploy the web-based File Compressor globally with a public URL.
+- It includes a Docker-based cloud deployment (recommended) and a direct host option from your Mac.
+- Your web server is at `web/server.py`. It serves the UI and wraps the compressor CLI.
+
+Zero-Cost Options (No Spend)
+- Cloudflare Tunnel (free) — share your local server securely over HTTPS without router changes.
+- Render Free (Docker) — limited free tier suitable for demos; may sleep or have quotas.
+- Railway Free — monthly credits for small services; good for testing.
+- Local Port Forwarding — if your ISP lets you, it’s free but requires router config.
+
+Key Facts
+- Server binds to `HOST` and `PORT` (defaults: `HOST=0.0.0.0`, `PORT=8000`).
+- CLI auto-detection looks for:
+  - `build/cli/universal`
+  - `bin/universal_comp.exe`
+  - `bin/universal_decompressor.exe` (if present)
+- Decompression safety: `.comp` inputs are moved into `web/output/` before running `-d`.
+
+Prerequisites
+1) A Git repository with this project’s files.
+2) Basic terminal skills.
+3) For Docker deploys: a Docker-capable platform (Fly.io, Render, Railway, or any VM).
+
+Option A — Docker Deploy (Recommended)
+This gives you a global URL, HTTPS, and easy scaling.
+
+Step A1: Add a Dockerfile
+Create `Dockerfile` in the project root with:
+
+    FROM python:3.11-slim AS build
+    RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential make pkg-config && rm -rf /var/lib/apt/lists/*
+    WORKDIR /app
+    COPY . .
+    # Build the CLI (produces bin/universal_comp.exe)
+    RUN make bin/universal_comp.exe
+
+    FROM python:3.11-slim
+    WORKDIR /app
+    COPY --from=build /app /app
+    ENV PORT=8080
+    EXPOSE 8080
+    CMD ["python3","web/server.py"]
+
+Notes:
+- The `.exe` suffix is a name only; the binary runs fine on Linux.
+- The server binds `0.0.0.0` so it’s reachable externally in containers.
+
+Step A2: Test Locally with Docker
+    docker build -t file-compressor:latest .
+    docker run --rm -p 8080:8080 file-compressor:latest
+    Open in browser: http://localhost:8080/
+
+Step A3: Deploy on Fly.io (example)
+1) Install Fly CLI and log in:
+    brew install flyctl
+    flyctl auth login
+2) Initialize the app (select internal port 8080 when asked):
+    flyctl launch --no-deploy
+3) Deploy:
+    flyctl deploy
+4) Open your URL:
+    flyctl open
+
+Optional — Persist uploads/output on Fly.io
+- Add a volume and mount it at `/app/web` to keep `uploads/` and `output/` across restarts.
+
+Option B — Render.com (Docker)
+1) Push your repo to GitHub.
+2) Create a new Web Service on Render, choose “Use Docker”.
+3) Render will build from `Dockerfile`. Set environment: `PORT=8080`.
+4) Deploy; Render provides a public HTTPS URL.
+5) If you want persistence, add a disk and mount it to `/app/web`.
+
+Option C — Railway.app (Docker)
+1) Import your repo.
+2) Add a Docker service; Railway builds your image from `Dockerfile`.
+3) Set `PORT=8080`. Deploy, use the public URL.
+
+Option D — Host from Your Mac (Port Forwarding)
+Works for demos; not ideal for production.
+
+Step D1: Start the server
+    HOST=0.0.0.0 PORT=8000 python3 web/server.py
+
+Step D2: Router port forward
+- Forward TCP port 8000 to your Mac’s local IP.
+- Ensure macOS firewall allows inbound on port 8000.
+
+Step D3: Access externally
+- Use your public IP or set up dynamic DNS (e.g., No-IP).
+- URL: http://YOUR_PUBLIC_IP:8000/
+
+Step D4: Optional HTTPS via Caddy
+1) Install Caddy and run:
+    caddy reverse-proxy --from YOUR_DOMAIN --to localhost:8000
+- Point your domain’s DNS A record to your public IP first.
+
+Alternative (No router changes) — Cloudflare Tunnel (Free)
+1) Install cloudflared:
+    brew install cloudflared
+2) Start your local server:
+    HOST=0.0.0.0 PORT=8000 python3 web/server.py
+3) Open a public HTTPS tunnel:
+    cloudflared tunnel --url http://localhost:8000
+4) Copy the generated HTTPS URL and share it. Your Mac must stay online.
+Notes:
+- Cloudflare Tunnel is free and avoids port forwarding.
+- For a persistent custom domain, create a named tunnel and connect your domain within Cloudflare.
+
+Operational Considerations
+- Upload size: current server reads files into memory; keep sizes modest. For large files, implement streaming.
+- Persistence: cloud deploys are often ephemeral. Mount a volume to `/app/web` if you need to keep `uploads/` and `output/` contents.
+- Security: for a public site, consider adding rate-limiting, simple auth, and file type restrictions.
+- Logging: platforms like Fly/Render show logs; use them to diagnose issues.
+
+Troubleshooting
+- CLI not found:
+  - In Docker: ensure `RUN make bin/universal_comp.exe` succeeds.
+  - Locally: build with `make bin/universal_comp.exe` or ensure `build/cli/universal` exists.
+- Permission errors (macOS only): Full Disk Access applies to local GUI/mac apps, not Docker/cloud.
+- Port mismatch:
+  - If your platform expects `PORT`, set it accordingly. Our Dockerfile uses `8080`.
+- 404 or UI not loading:
+  - Confirm the container started and that `/web/index.html` is served.
+- Large uploads failing:
+  - Increase platform limits or switch to streaming uploads.
+
+Quick Commands (Cheat Sheet)
+- Local server:
+    HOST=0.0.0.0 PORT=8000 python3 web/server.py
+- Docker build & run:
+    docker build -t file-compressor .
+    docker run --rm -p 8080:8080 file-compressor
+- Fly.io deploy:
+    flyctl launch --no-deploy
+    flyctl deploy
+    flyctl open
+
+Next Steps
+- Choose a platform (Fly.io/Render/Railway), add the Dockerfile, and deploy.
+- If you want, we can add a one-click deploy config for your chosen platform.

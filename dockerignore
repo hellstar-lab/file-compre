@@ -1,0 +1,23 @@
+# VCS and editor
+.git
+.vscode
+
+# Build artifacts and caches
+build/
+obj/
+build_log.txt
+
+# Local outputs and decompressed samples
+output/
+decompressed/
+preview/
+*.out
+*.comp
+
+# Local web runtime data (server creates directories at runtime)
+web/uploads/*
+web/output/*
+
+# OS files
+.DS_Store
+Thumbs.db
