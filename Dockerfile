@@ -3,8 +3,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential make pkg-config && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY . .
-# Build the compressor CLI. Force a clean rebuild without depending on Makefile 'clean'.
-RUN rm -rf obj bin && make bin/universal_comp.exe
+# Build the compressor CLI. Force a clean rebuild and use the Makefile's default targets.
+RUN rm -rf obj bin && make all
 
 FROM python:3.11-slim
 WORKDIR /app
