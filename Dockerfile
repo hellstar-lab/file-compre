@@ -2,9 +2,9 @@ FROM python:3.11-slim AS build
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential make pkg-config && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY . .
-# Build the compressor CLI. Force a clean rebuild and use the Makefile's default targets.
-RUN rm -rf obj bin && make all
+    COPY . .
+    # Build only the universal compressor CLI with a clean rebuild.
+    RUN rm -rf obj bin && make cli
 
 FROM python:3.11-slim
 WORKDIR /app
